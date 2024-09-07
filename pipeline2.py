@@ -6,6 +6,9 @@ from tqdm import tqdm
 import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
+import requests
+import shutil
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
@@ -47,7 +50,7 @@ from transformers import (
     DistilBertTokenizer,
 )
 
-from torcheval.metrics.functional import multiclass_f1_score
+# from torcheval.metrics.functional import multiclass_f1_score
 
 # Глобальные переменные
 TORCH_DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -79,6 +82,25 @@ SHORT_NAMES = [
 # fmt: on
 
 print(f"PyTorch использует {TORCH_DEVICE}")
+
+
+def download_file(url, dest):
+    """
+    Скачивает файл по заданному URL.
+
+    Параметры:
+    ----------
+    url : str
+        URL для скачивания
+    dest : str
+        Путь до файла для сохранения
+    """
+    print(f'Скачиваем {dest}...')
+    with requests.get(url, stream=True) as r:
+        with open(dest, 'wb') as fd:
+            for chunk in r.iter_content(chunk_size=128):
+                fd.write(chunk)
+    return dest
 
 
 class TrainDataset(Dataset):
@@ -182,9 +204,9 @@ class BERTClass(torch.nn.Module):
 
     def __init__(self, num_classes):
         super(BERTClass, self).__init__()
-        self.bert1 = BertModel.from_pretrained(MODEL_NAME)
-        self.bert2 = BertModel.from_pretrained(MODEL_NAME)
-        self.lin = torch.nn.Linear(312 * 2, num_classes)
+        self.l1 = BertModel.from_pretrained(MODEL_NAME)
+        self.la = BertModel.from_pretrained(MODEL_NAME)
+        self.l2 = torch.nn.Linear(312 * 2, num_classes)
 
     def forward(self, ids, mask, token_type_ids, aids, amask, atoken_type_ids):
         """
@@ -210,15 +232,15 @@ class BERTClass(torch.nn.Module):
         torch.Tensor
             Тензор с предсказанными логитами для каждого класса.
         """
-        x = self.bert1(ids, attention_mask=mask, token_type_ids=token_type_ids)[
+        x = self.l1(ids, attention_mask=mask, token_type_ids=token_type_ids)[
             "pooler_output"
         ]
-        xa = self.bert2(aids, attention_mask=amask, token_type_ids=atoken_type_ids)[
+        xa = self.la(aids, attention_mask=amask, token_type_ids=atoken_type_ids)[
             "pooler_output"
         ]
 
         # Объединяем выходы двух моделей BERT и пропускаем через линейный слой
-        x = self.lin(torch.cat([x, xa], dim=1))
+        x = self.l2(torch.cat([x, xa], dim=1))
         x[:, -1] = (
             -10000
         )  # Принудительно задаем очень низкое значение для последнего класса
@@ -324,12 +346,12 @@ def train(
             big_val, big_idx = torch.max(outputs.data, dim=1)
 
             # Вычисление точности (F1-score) для текущей итерации
-            accuracy = (
-                calculate_accuracy(other_idx, big_idx, targets, num_classes)
-                .cpu()
-                .item()
-            )
-            accuracies.append(accuracy)
+            # accuracy = (
+            #     calculate_accuracy(other_idx, big_idx, targets, num_classes)
+            #     .cpu()
+            #     .item()
+            # )
+            # accuracies.append(accuracy)
 
             nb_tr_steps += 1
             nb_tr_examples += targets.size(0)
@@ -361,13 +383,12 @@ def unzip_train_archive(data_zip_path):
     data_zip_path : str
         Путь к zip-архиву с данными.
     """
-    print(f"Распаковка {data_zip_path}... ", end="")
+    print(f"Распаковка {data_zip_path}...")
     with zipfile.ZipFile(data_zip_path, "r") as zip_ref:
         zip_ref.extractall(".")
-    print("готово")
 
 
-def run(data_zip_path=None, model_path=None, use_pretrained=False):
+def run(data_zip_path=None, model_path=None, use_pretrained=False, pretrained_download_url='https://github.com/Dliwk/cp-ml-reference/releases/download/v1.0/model.pt'):
     """
     Основная функция для запуска обучения модели.
 
@@ -380,11 +401,14 @@ def run(data_zip_path=None, model_path=None, use_pretrained=False):
     use_pretrained : bool, optional
         Флаг для использования предобученной модели (по умолчанию False).
     """
+    data_path = "vprod_train"
+
     # Распаковка архива с данными
-    unzip_train_archive(data_zip_path)
+    if not Path(data_path).exists():
+        unzip_train_archive(data_zip_path)
 
     # Загрузка данных
-    data_path = "vprod_train"
+    print('Загружаем датасет в оперативную память...')
     data = pd.read_csv(f"{data_path}/TRAIN_RES_1.csv")  # всего их 5
 
     # Предобработка данных
@@ -463,10 +487,18 @@ def run(data_zip_path=None, model_path=None, use_pretrained=False):
     loss_function = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=LEARNING_RATE, eps=1e-6)
 
-    # Обучение модели
-    train(
-        model, training_loader, optimizer, loss_function, other_idx, NUM_CLASSES, EPOCHS
-    )
+    if use_pretrained:
+        if not Path(model_path).exists():
+            download_file(pretrained_download_url, model_path)
 
-    # Сохранение обученной модели
-    torch.save(model.state_dict(), model_path)
+        model.load_state_dict(torch.load(model_path, map_location=TORCH_DEVICE))
+    else:
+        # Обучение модели
+        train(
+            model, training_loader, optimizer, loss_function, other_idx, NUM_CLASSES, EPOCHS
+        )
+
+        # Сохранение обученной модели
+        torch.save(model.state_dict(), model_path)
+
+    
