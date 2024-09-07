@@ -1,0 +1,5 @@
+__pycache__
+*.pyc
+.venv
+/vprod_train
+/vprod_train.zip
