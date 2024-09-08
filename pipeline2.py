@@ -447,6 +447,7 @@ def run(
     pretrained_download_url="https://github.com/Dliwk/cp-ml-reference/releases/download/v1.0/model.pt",
     do_predict=True,
     prediction_file_path='prediction.csv',
+    test_path='.',
 ):
     """
     Основная функция для запуска обучения модели.
@@ -473,9 +474,7 @@ def run(
     # Загрузка данных
     print("Загружаем датасет в оперативную память...")
     data = pd.read_csv(f"{data_path}/TRAIN_RES_1.csv")  # всего их 5
-    # test_data = pd.read_csv(f'TEST_RES.csv')
-    test_data = pd.read_csv(f'test_test_res.csv')
-    # test_data = pd.read_csv(f'{data_path}/TRAIN_RES_2.csv').iloc[:100]
+    test_data = pd.read_csv(f'{test_path}/TEST_RES.csv')
 
     # Предобработка данных
     data = data.rename(columns={"id_cv": "id"})

@@ -1,13 +1,16 @@
 def run(args):
     import pipeline2
+    import pipeline3
 
     pipeline2.run(
         data_zip_path=args.data,
         model_path=args.model,
         use_pretrained=args.fetch_pretrained,
-        prediction_file_path=args.result,
+        test_path=args.test_path,
     )
 
+    # Создаст submission.csv
+    pipeline3.run(test_path=args.test_path)
 
 if __name__ == "__main__":
     import argparse
@@ -24,7 +27,7 @@ if __name__ == "__main__":
         help="whether to fetch pretrained model weights",
         action="store_true",
     )
-    parser.add_argument("--result", help="path to prediction.csv", default='prediction.csv')
+    parser.add_argument("--test-path", help="path to directory with TEST_RES.csv", required=True)
 
     args = parser.parse_args()
 
