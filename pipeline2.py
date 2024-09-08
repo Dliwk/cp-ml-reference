@@ -316,7 +316,7 @@ def train(
             else:
                 lr = 1e-6
 
-            if it == 5_000:
+            if it == 8_000:
                 break
 
             if lr != past_lr:
@@ -429,6 +429,9 @@ def predict(model, loader, classes, other_idx, decode=False):
 
 
 def decode_array(classes, other_idx, a):
+    """
+    Восстанавливает названия профессий
+    """
     for i, x in enumerate(a):
         if x == other_idx:
             a[i] = "other"
