@@ -9,7 +9,7 @@ import numpy as np
 from pathlib import Path
 import requests
 import shutil
-# from torcheval.metrics.functional import multiclass_f1_score, multiclass_accuracy
+from torcheval.metrics.functional import multiclass_f1_score, multiclass_accuracy
 from sklearn.metrics import precision_score, recall_score
 
 from sklearn.model_selection import train_test_split
@@ -316,7 +316,7 @@ def train(
             else:
                 lr = 1e-6
 
-            if it == 26_000:
+            if it == 5_000:
                 break
 
             if lr != past_lr:
@@ -346,12 +346,12 @@ def train(
             big_val, big_idx = torch.max(outputs.data, dim=1)
 
             # Вычисление точности (F1-score) для текущей итерации
-            # accuracy = (
-            #     calculate_accuracy(other_idx, big_idx, targets, num_classes)
-            #     .cpu()
-            #     .item()
-            # )
-            # accuracies.append(accuracy)
+            accuracy = (
+                calculate_accuracy(other_idx, big_idx, targets, num_classes)
+                .cpu()
+                .item()
+            )
+            accuracies.append(accuracy)
 
             nb_tr_steps += 1
             nb_tr_examples += targets.size(0)
@@ -388,7 +388,7 @@ def unzip_train_archive(data_zip_path):
         zip_ref.extractall(".")
 
 
-def predict(model, loader, decode=False):
+def predict(model, loader, classes, other_idx, decode=False):
     """
     Запускает модель на тестовом наборе данных.
 
@@ -411,7 +411,8 @@ def predict(model, loader, decode=False):
         aids = data["aids"].to(TORCH_DEVICE, dtype=torch.long)
         amask = data["amask"].to(TORCH_DEVICE, dtype=torch.long)
         atoken_type_ids = data["atoken_type_ids"].to(TORCH_DEVICE, dtype=torch.long)
-        targets = data["targets"].to(TORCH_DEVICE, dtype=torch.long)
+
+        indices += list(data['index'])
 
         with torch.no_grad():
             outputs = model(
@@ -421,12 +422,19 @@ def predict(model, loader, decode=False):
         big_val, big_idx = torch.max(outputs.data, dim=1)
         predicted.extend(big_idx.cpu().numpy())
 
-    predicted = np.array(predicted)
-
     if decode:
-        predicted = decode_array(predicted)
+        predicted = decode_array(classes, other_idx, predicted)
+    
+    return np.array(predicted, dtype=object)[indices]
 
-    return predicted
+
+def decode_array(classes, other_idx, a):
+    for i, x in enumerate(a):
+        if x == other_idx:
+            a[i] = "other"
+        else:
+            a[i] = classes[x]
+    return a
 
 
 def run(
@@ -462,17 +470,25 @@ def run(
     # Загрузка данных
     print("Загружаем датасет в оперативную память...")
     data = pd.read_csv(f"{data_path}/TRAIN_RES_1.csv")  # всего их 5
+    # test_data = pd.read_csv(f'TEST_RES.csv')
+    test_data = pd.read_csv(f'test_test_res.csv')
+    # test_data = pd.read_csv(f'{data_path}/TRAIN_RES_2.csv').iloc[:100]
 
     # Предобработка данных
     data = data.rename(columns={"id_cv": "id"})
     data["company_name"] = data["company_name"].fillna("nan")
 
+    test_data = test_data.rename(columns={"id_cv": "id"})
+    test_data["company_name"] = test_data["company_name"].fillna("nan")
+
     Xu = data.groupby("id").last()
+    X_test = test_data.copy()
 
     y = Xu["job_title"]
     X = Xu.drop(columns=["job_title"])
 
     X["demands"] = X["demands"].fillna("нет")
+    X_test["demands"] = X_test["demands"].fillna("нет")
 
     # Определение классов и их индексов
     classes = list(Xu["job_title"].value_counts().index[:CLASSES_COUNT])
@@ -491,7 +507,12 @@ def run(
     # Объединение названия компании и достижений в один текст
     Xu["achievements_modified"] = Xu["achievements_modified"].fillna("не указано")
     Xu["achievements_modified"] = (
-        Xu["company_name"].astype(str) + "; достижения: " + Xu["achievements_modified"]
+        "достижения: " + Xu["achievements_modified"]
+    )
+
+    X_test["achievements_modified"] = X_test["achievements_modified"].fillna("не указано")
+    X_test["achievements_modified"] = (
+        "достижения: " + X_test["achievements_modified"]
     )
 
     # Разделение данных на обучающую и валидационную выборки
@@ -514,20 +535,31 @@ def run(
         }
     ).reset_index()
 
+    df_test = pd.DataFrame(
+        {
+            "text": X_test["demands"],
+            "achievements": X_test["achievements_modified"],
+            "label": 1,
+        }
+    ).reset_index()
+
     # Инициализация токенизатора
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     # Создание датасетов для обучения и валидации
     training_set = TrainDataset(df_train, tokenizer, MAX_LEN)
     validation_set = TrainDataset(df_val, tokenizer, MAX_LEN)
+    test_set = TrainDataset(df_test, tokenizer, MAX_LEN)
 
     # Параметры для DataLoader
     train_params = {"batch_size": TRAIN_BATCH_SIZE, "shuffle": True, "num_workers": 0}
     val_params = {"batch_size": VALID_BATCH_SIZE, "shuffle": True, "num_workers": 0}
+    test_params = {"batch_size": VALID_BATCH_SIZE, "shuffle": False, "num_workers": 0}
 
     # Создание DataLoader для обучения и валидации
     training_loader = DataLoader(training_set, **train_params)
     validation_loader = DataLoader(validation_set, **val_params)
+    test_loader = DataLoader(test_set, **test_params)
 
     # Определение количества классов
     NUM_CLASSES = len(classes) + 1
@@ -560,8 +592,7 @@ def run(
         torch.save(model.state_dict(), model_path)
 
     if do_predict:
-        # TODO: construct loader from test dataset
-        result = predict(model, validation_loader, decode=True)
+        result = predict(model, test_loader, classes, other_idx, decode=True)
         result_df = pd.DataFrame({'answer': result})
         result_df.to_csv(prediction_file_path)
 
